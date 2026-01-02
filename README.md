@@ -68,12 +68,25 @@ You can sync time on your devices using the `matter_time_sync.sync_time` service
 Sync time every day at 3:00 AM:
 
 ```yaml
-alias: Sync Matter Device Time
-trigger:
-  - platform: time
-    at: "03:00:00"
-action:
+alias: "[TIME] Sync IKEA ALPSTUGA"
+description: ""
+triggers:
+  - at: "03:15:00"
+    trigger: time
+  - entity_id:
+      - switch.alpstuga_air_quality_monitor
+    from:
+      - unavailable
+    to: null
+    trigger: state
+actions:
+  - delay:
+      hours: 0
+      minutes: 0
+      seconds: 5
+      milliseconds: 0
   - action: matter_time_sync.sync_time
     data:
       node_id: 7
       endpoint: 0
+mode: restart
