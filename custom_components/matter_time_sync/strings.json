@@ -28,6 +28,10 @@
     "abort": {
       "already_configured": "Matter Time Sync is already configured."
     }
+    "status": {
+      "auto_detected": "✅ Matter Server auto-detected!",
+      "not_detected": "⚠️ No Matter integration found. Please verify URL manually."
+    }
   },
   "options": {
     "step": {
