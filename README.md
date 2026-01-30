@@ -12,7 +12,7 @@ This component communicates directly with the Matter Server Add-on (or standalon
 
 ## ⚠️ WARNING
 ### Breaking Change in v2.0.0+
-By upgrading to v2.0, you must delete your current entry in **Settings > Devices & Services > Matter Time Sync** and add it again.
+By upgrading to v2.0.0, you must delete your current entry in **Settings > Devices & Services > Matter Time Sync** and add it again.
 This is required to load the new configuration options properly.
 
 ## ✨ Features
