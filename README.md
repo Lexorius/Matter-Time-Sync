@@ -12,7 +12,7 @@ This component communicates directly with the Matter Server Add-on (or standalon
 
 ## ⚠️ WARNING
 ### Breaking Change: Users upgrading from v1.0.4 must delete and re-add the integration (this does not apply to fresh installs or users already on v2.0.0).
-Go to Settings > Devices & Services, find the Matter Time Sync entry, delete it, and add it again.
+Go to Settings > Devices & Services, find the Matter Time Sync entry, delete it, and add it again.<br/>
 This is required to load the new configuration options properly.
 
 ## ✨ Features
