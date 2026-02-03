@@ -132,7 +132,15 @@ async def _setup_auto_sync_timer(
         """Callback for auto-sync timer."""
         _LOGGER.info("Auto-sync triggered at %s", now)
         
-        # Also check for new devices during auto-sync
+        # First ensure we can connect
+        if not await coordinator.async_ensure_connected():
+            _LOGGER.error(
+                "Auto-sync failed: Cannot connect to Matter Server at %s",
+                coordinator._ws_url,
+            )
+            return
+
+        # Check for new devices during auto-sync
         from .button import async_check_new_devices
         new_count = await async_check_new_devices(hass, entry.entry_id)
         if new_count > 0:
@@ -159,7 +167,17 @@ async def _setup_auto_sync_timer(
         """Run initial sync after startup."""
         import asyncio
         await asyncio.sleep(30)  # Wait 30 seconds after startup
+        
         _LOGGER.info("Running initial auto-sync after startup")
+        
+        # Ensure connection first
+        if not await coordinator.async_ensure_connected():
+            _LOGGER.warning(
+                "Initial sync skipped: Cannot connect to Matter Server. "
+                "Will retry at next scheduled interval."
+            )
+            return
+            
         await coordinator.async_sync_all_devices()
 
     hass.async_create_task(_initial_sync())

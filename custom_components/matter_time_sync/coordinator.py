@@ -111,7 +111,7 @@ class MatterTimeSyncCoordinator:
             self._session = None
 
     async def _cleanup_connection(self) -> None:
-        """Close and cleanup websocket + session (with lock)."""
+        """Close and cleanup websocket + session."""
         async with self._lock:
             await self._cleanup_connection_internal()
 
@@ -126,7 +126,6 @@ class MatterTimeSyncCoordinator:
             return False
 
         try:
-            # Send a simple get_nodes command to test the connection
             response = await self._async_send_command_internal("get_nodes", timeout=5)
             return response is not None
         except Exception as err:
@@ -135,21 +134,17 @@ class MatterTimeSyncCoordinator:
 
     async def async_ensure_connected(self) -> bool:
         """Ensure we have a working connection, reconnect if necessary."""
-        # First check if we think we're connected
         if self.is_connected:
-            # Test if the connection is actually working
             if await self.async_test_connection():
                 return True
             else:
                 _LOGGER.warning("Connection test failed, reconnecting...")
                 await self._cleanup_connection()
 
-        # Try to connect
         for attempt in range(MAX_RETRIES):
             _LOGGER.debug("Connection attempt %d/%d", attempt + 1, MAX_RETRIES)
             
             if await self.async_connect():
-                # Verify the connection works
                 if await self.async_test_connection():
                     _LOGGER.info("Successfully connected to Matter Server")
                     return True
@@ -219,10 +214,9 @@ class MatterTimeSyncCoordinator:
     async def _async_send_command(
         self, command: str, args: dict[str, Any] | None = None
     ) -> dict[str, Any] | None:
-        """Send a command to the Matter Server and wait for response (with retry)."""
+        """Send a command to the Matter Server and wait for response."""
         async with self._command_lock:
             for attempt in range(MAX_RETRIES):
-                # Ensure we're connected before sending
                 if not self.is_connected:
                     if not await self.async_connect():
                         if attempt < MAX_RETRIES - 1:
@@ -235,7 +229,6 @@ class MatterTimeSyncCoordinator:
                 if result is not None:
                     return result
 
-                # Command failed, check if it's a connection issue
                 if not self.is_connected or (self._ws and self._ws.closed):
                     _LOGGER.warning(
                         "Connection lost during command %s, attempt %d/%d",
@@ -247,7 +240,6 @@ class MatterTimeSyncCoordinator:
                         await asyncio.sleep(RETRY_DELAY_SECONDS)
                         continue
                 else:
-                    # Command failed but connection is OK - don't retry
                     break
 
             return None
@@ -288,7 +280,6 @@ class MatterTimeSyncCoordinator:
 
     async def async_get_matter_nodes(self) -> list[dict[str, Any]]:
         """Get all Matter nodes from the server."""
-        # Ensure connection before fetching nodes
         if not await self.async_ensure_connected():
             _LOGGER.error("Cannot get Matter nodes: not connected")
             return self._nodes_cache
@@ -401,84 +392,70 @@ class MatterTimeSyncCoordinator:
                 _LOGGER.error("Cannot sync time for node %s: not connected", node_id)
                 return False
 
-            return await self._async_sync_time_internal(node_id, endpoint)
+            # Ensure we have node info for endpoint auto-selection
+            if not self._nodes_cache:
+                await self.async_get_matter_nodes()
 
-    async def _async_sync_time_internal(self, node_id: int, endpoint: int = 0) -> bool:
-        """Internal sync time implementation (assumes connected)."""
-        # Ensure we have node info for endpoint auto-selection
-        if not self._nodes_cache:
-            await self.async_get_matter_nodes()
-
-        endpoint_id = endpoint
-        if endpoint == 0:
-            node = next(
-                (n for n in self._nodes_cache if n.get("node_id") == node_id),
-                None,
-            )
-            endpoints = (node or {}).get("time_sync_endpoints") or []
-            if endpoints and 0 not in endpoints:
-                endpoint_id = endpoints[0]
-                _LOGGER.debug(
-                    "Using Time Sync endpoint %s for node %s (cluster 56 not on endpoint 0)",
-                    endpoint_id,
-                    node_id,
+            endpoint_id = endpoint
+            if endpoint == 0:
+                node = next(
+                    (n for n in self._nodes_cache if n.get("node_id") == node_id),
+                    None,
                 )
+                endpoints = (node or {}).get("time_sync_endpoints") or []
+                if endpoints and 0 not in endpoints:
+                    endpoint_id = endpoints[0]
+                    _LOGGER.debug(
+                        "Using Time Sync endpoint %s for node %s (cluster 56 not on endpoint 0)",
+                        endpoint_id,
+                        node_id,
+                    )
 
-        try:
-            tz = ZoneInfo(self._timezone)
-        except Exception:
-            _LOGGER.warning("Invalid timezone %s, using UTC", self._timezone)
-            tz = ZoneInfo("UTC")
+            try:
+                tz = ZoneInfo(self._timezone)
+            except Exception:
+                _LOGGER.warning("Invalid timezone %s, using UTC", self._timezone)
+                tz = ZoneInfo("UTC")
 
-        now = datetime.now(tz)
-        utc_now = now.astimezone(ZoneInfo("UTC"))
+            now = datetime.now(tz)
+            utc_now = now.astimezone(ZoneInfo("UTC"))
 
-        # Total UTC offset in seconds (includes DST when applicable)
-        total_offset = int(now.utcoffset().total_seconds()) if now.utcoffset() else 0
+            # Total UTC offset in seconds (includes DST when applicable)
+            total_offset = int(now.utcoffset().total_seconds()) if now.utcoffset() else 0
 
-        # FORCE DST TO 0 (merge DST into utc_offset)
-        utc_offset = total_offset
-        dst_offset = 0
+            # FORCE DST TO 0 (merge DST into utc_offset)
+            utc_offset = total_offset
+            dst_offset = 0
 
-        # Matter Time Sync uses CHIP epoch (2000-01-01) in microseconds
-        utc_microseconds = _to_chip_epoch_us(utc_now)
+            # Matter Time Sync uses CHIP epoch (2000-01-01) in microseconds
+            utc_microseconds = _to_chip_epoch_us(utc_now)
 
-        _LOGGER.info(
-            "Syncing time for node %s: local=%s, UTC=%s, offset=%ds, DST=%ds (forced to 0)",
-            node_id,
-            now.isoformat(),
-            utc_now.isoformat(),
-            utc_offset,
-            dst_offset,
-        )
+            _LOGGER.info(
+                "Syncing time for node %s: local=%s, UTC=%s, offset=%ds (%+.1fh), DST=%ds (forced to 0)",
+                node_id,
+                now.isoformat(),
+                utc_now.isoformat(),
+                utc_offset,
+                utc_offset / 3600,
+                dst_offset,
+            )
 
-        # ---------------------------------------------------------
-        # Reordered sequence (to reduce brief wrong local display):
-        #   1) SetTimeZone
-        #   2) SetDSTOffset
-        #   3) SetUTCTime (last)
-        # ---------------------------------------------------------
+            # ---------------------------------------------------------
+            # Reordered sequence (to reduce brief wrong local display):
+            #   1) SetTimeZone
+            #   2) SetDSTOffset
+            #   3) SetUTCTime (last)
+            # ---------------------------------------------------------
 
-        # ---------------------------------------------------------
-        # 1) Set TimeZone FIRST
-        # ---------------------------------------------------------
-        tz_list_with_name = [
-            {"offset": utc_offset, "validAt": 0, "name": self._timezone}
-        ]
-        tz_list_no_name = [{"offset": utc_offset, "validAt": 0}]
+            # ---------------------------------------------------------
+            # 1) Set TimeZone FIRST
+            # ---------------------------------------------------------
+            tz_list_with_name = [
+                {"offset": utc_offset, "validAt": 0, "name": self._timezone}
+            ]
+            tz_list_no_name = [{"offset": utc_offset, "validAt": 0}]
 
-        # Try spec-like key first, then common JSON key (hybrid)
-        tz_response = await self._async_send_command(
-            "device_command",
-            {
-                "node_id": node_id,
-                "endpoint_id": endpoint_id,
-                "cluster_id": TIME_SYNC_CLUSTER_ID,
-                "command_name": "SetTimeZone",
-                "payload": {"TimeZone": tz_list_with_name},
-            },
-        )
-        if not tz_response:
+            # Try spec-like key first, then common JSON key (hybrid)
             tz_response = await self._async_send_command(
                 "device_command",
                 {
@@ -486,27 +463,7 @@ class MatterTimeSyncCoordinator:
                     "endpoint_id": endpoint_id,
                     "cluster_id": TIME_SYNC_CLUSTER_ID,
                     "command_name": "SetTimeZone",
-                    "payload": {"timeZone": tz_list_with_name},
-                },
-            )
-
-        if tz_response:
-            _LOGGER.debug(
-                "SetTimeZone successful for node %s (offset=%d)", node_id, utc_offset
-            )
-        else:
-            _LOGGER.warning(
-                "SetTimeZone failed for node %s, trying without name", node_id
-            )
-
-            tz_response = await self._async_send_command(
-                "device_command",
-                {
-                    "node_id": node_id,
-                    "endpoint_id": endpoint_id,
-                    "cluster_id": TIME_SYNC_CLUSTER_ID,
-                    "command_name": "SetTimeZone",
-                    "payload": {"TimeZone": tz_list_no_name},
+                    "payload": {"TimeZone": tz_list_with_name},
                 },
             )
             if not tz_response:
@@ -517,41 +474,59 @@ class MatterTimeSyncCoordinator:
                         "endpoint_id": endpoint_id,
                         "cluster_id": TIME_SYNC_CLUSTER_ID,
                         "command_name": "SetTimeZone",
-                        "payload": {"timeZone": tz_list_no_name},
+                        "payload": {"timeZone": tz_list_with_name},
                     },
                 )
 
             if tz_response:
-                _LOGGER.debug("SetTimeZone (without name) successful for node %s", node_id)
+                _LOGGER.debug(
+                    "SetTimeZone successful for node %s (offset=%d)", node_id, utc_offset
+                )
             else:
-                _LOGGER.warning("SetTimeZone completely failed for node %s", node_id)
+                _LOGGER.warning(
+                    "SetTimeZone failed for node %s, trying without name", node_id
+                )
 
-        # ---------------------------------------------------------
-        # 2) Set DST Offset SECOND (Try PascalCase first, then camelCase)
-        # ---------------------------------------------------------
-        far_future_us = _to_chip_epoch_us(utc_now + timedelta(days=365))
+                tz_response = await self._async_send_command(
+                    "device_command",
+                    {
+                        "node_id": node_id,
+                        "endpoint_id": endpoint_id,
+                        "cluster_id": TIME_SYNC_CLUSTER_ID,
+                        "command_name": "SetTimeZone",
+                        "payload": {"TimeZone": tz_list_no_name},
+                    },
+                )
+                if not tz_response:
+                    tz_response = await self._async_send_command(
+                        "device_command",
+                        {
+                            "node_id": node_id,
+                            "endpoint_id": endpoint_id,
+                            "cluster_id": TIME_SYNC_CLUSTER_ID,
+                            "command_name": "SetTimeZone",
+                            "payload": {"timeZone": tz_list_no_name},
+                        },
+                    )
 
-        dst_list = [
-            {
-                "offset": dst_offset,  # Always 0
-                "validStarting": 0,
-                "validUntil": far_future_us,
-            }
-        ]
+                if tz_response:
+                    _LOGGER.debug("SetTimeZone (without name) successful for node %s", node_id)
+                else:
+                    _LOGGER.warning("SetTimeZone completely failed for node %s", node_id)
 
-        dst_response = await self._async_send_command(
-            "device_command",
-            {
-                "node_id": node_id,
-                "endpoint_id": endpoint_id,
-                "cluster_id": TIME_SYNC_CLUSTER_ID,
-                "command_name": "SetDSTOffset",
-                "payload": {"DSTOffset": dst_list},
-            },
-        )
+            # ---------------------------------------------------------
+            # 2) Set DST Offset SECOND (Try PascalCase first, then camelCase)
+            # ---------------------------------------------------------
+            far_future_us = _to_chip_epoch_us(utc_now + timedelta(days=365))
 
-        if not dst_response:
-            _LOGGER.debug("SetDSTOffset (PascalCase) failed, trying camelCase...")
+            dst_list = [
+                {
+                    "offset": dst_offset,  # Always 0
+                    "validStarting": 0,
+                    "validUntil": far_future_us,
+                }
+            ]
+
             dst_response = await self._async_send_command(
                 "device_command",
                 {
@@ -559,37 +534,37 @@ class MatterTimeSyncCoordinator:
                     "endpoint_id": endpoint_id,
                     "cluster_id": TIME_SYNC_CLUSTER_ID,
                     "command_name": "SetDSTOffset",
-                    "payload": {"dstOffset": dst_list},
+                    "payload": {"DSTOffset": dst_list},
                 },
             )
 
-        if dst_response:
-            _LOGGER.debug("SetDSTOffset (0) successful for node %s", node_id)
-        else:
-            _LOGGER.debug(
-                "SetDSTOffset not supported or failed for node %s (this is often OK)",
-                node_id,
-            )
+            if not dst_response:
+                _LOGGER.debug("SetDSTOffset (PascalCase) failed, trying camelCase...")
+                dst_response = await self._async_send_command(
+                    "device_command",
+                    {
+                        "node_id": node_id,
+                        "endpoint_id": endpoint_id,
+                        "cluster_id": TIME_SYNC_CLUSTER_ID,
+                        "command_name": "SetDSTOffset",
+                        "payload": {"dstOffset": dst_list},
+                    },
+                )
 
-        # ---------------------------------------------------------
-        # 3) Set UTC Time LAST (Try PascalCase first, then camelCase)
-        # ---------------------------------------------------------
-        payload_utc_pascal = {"UTCTime": utc_microseconds, "granularity": 3}
-        payload_utc_camel = {"utcTime": utc_microseconds, "granularity": 3}
+            if dst_response:
+                _LOGGER.debug("SetDSTOffset (0) successful for node %s", node_id)
+            else:
+                _LOGGER.debug(
+                    "SetDSTOffset not supported or failed for node %s (this is often OK)",
+                    node_id,
+                )
 
-        time_response = await self._async_send_command(
-            "device_command",
-            {
-                "node_id": node_id,
-                "endpoint_id": endpoint_id,
-                "cluster_id": TIME_SYNC_CLUSTER_ID,
-                "command_name": "SetUTCTime",
-                "payload": payload_utc_pascal,
-            },
-        )
+            # ---------------------------------------------------------
+            # 3) Set UTC Time LAST (Try PascalCase first, then camelCase)
+            # ---------------------------------------------------------
+            payload_utc_pascal = {"UTCTime": utc_microseconds, "granularity": 3}
+            payload_utc_camel = {"utcTime": utc_microseconds, "granularity": 3}
 
-        if not time_response:
-            _LOGGER.debug("SetUTCTime (PascalCase) failed, trying camelCase...")
             time_response = await self._async_send_command(
                 "device_command",
                 {
@@ -597,134 +572,87 @@ class MatterTimeSyncCoordinator:
                     "endpoint_id": endpoint_id,
                     "cluster_id": TIME_SYNC_CLUSTER_ID,
                     "command_name": "SetUTCTime",
-                    "payload": payload_utc_camel,
+                    "payload": payload_utc_pascal,
                 },
             )
 
-        if not time_response:
-            _LOGGER.error(
-                "Failed to set UTC time for node %s (tried both formats)", node_id
+            if not time_response:
+                _LOGGER.debug("SetUTCTime (PascalCase) failed, trying camelCase...")
+                time_response = await self._async_send_command(
+                    "device_command",
+                    {
+                        "node_id": node_id,
+                        "endpoint_id": endpoint_id,
+                        "cluster_id": TIME_SYNC_CLUSTER_ID,
+                        "command_name": "SetUTCTime",
+                        "payload": payload_utc_camel,
+                    },
+                )
+
+            if not time_response:
+                _LOGGER.error(
+                    "Failed to set UTC time for node %s (tried both formats)", node_id
+                )
+                return False
+
+            _LOGGER.debug("SetUTCTime successful for node %s", node_id)
+
+            _LOGGER.info(
+                "Time synced for node %s: %s (UTC offset: %+ds = %+.1fh, DST: %d)",
+                node_id,
+                now.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                utc_offset,
+                utc_offset / 3600,
+                dst_offset,
             )
-            return False
+            return True
 
-        _LOGGER.debug("SetUTCTime successful for node %s", node_id)
-
-        _LOGGER.info(
-            "Time synced for node %s: %s (UTC offset: %d, DST: %d)",
-            node_id,
-            now.isoformat(),
-            utc_offset,
-            dst_offset,
-        )
-        return True
-
-    async def async_sync_all_devices(self) -> dict[str, Any]:
-        """Sync time on all filtered devices.
-        
-        Returns a dict with sync results:
-        {
-            "success": int,
-            "failed": int,
-            "skipped": int,
-            "devices": [{"node_id": int, "name": str, "status": str}, ...]
-        }
-        """
-        result = {
-            "success": 0,
-            "failed": 0,
-            "skipped": 0,
-            "devices": [],
-        }
-
-        # Ensure connection before starting
+    async def async_sync_all_devices(self) -> None:
+        """Sync time on all filtered devices."""
+        # Ensure connection before syncing
         if not await self.async_ensure_connected():
             _LOGGER.error("Cannot sync all devices: not connected to Matter Server")
-            return result
+            return
 
         nodes = await self.async_get_matter_nodes()
-
-        if not nodes:
-            _LOGGER.warning("No Matter nodes found")
-            return result
 
         device_filters = self.entry.data.get("device_filter", "")
         device_filters = [t.strip().lower() for t in device_filters.split(",") if t.strip()]
         only_time_sync = self.entry.data.get("only_time_sync_devices", True)
 
-        _LOGGER.info(
-            "Starting sync for %d nodes (filter: %s, only_time_sync: %s)",
-            len(nodes),
-            device_filters if device_filters else "[all]",
-            only_time_sync,
-        )
-
+        count = 0
+        skipped = 0
+        failed = 0
+        
         for node in nodes:
             node_id = node.get("node_id")
             node_name = node.get("name", f"Node {node_id}")
             has_time_sync = node.get("has_time_sync", False)
 
-            # Skip devices without Time Sync cluster (if option is enabled)
             if only_time_sync and not has_time_sync:
-                _LOGGER.debug("Skipping node %s (no Time Sync support)", node_name)
-                result["skipped"] += 1
-                result["devices"].append({
-                    "node_id": node_id,
-                    "name": node_name,
-                    "status": "skipped_no_time_sync",
-                })
+                skipped += 1
                 continue
 
-            # Apply device filter
             if device_filters and not any(term in node_name.lower() for term in device_filters):
-                _LOGGER.debug("Skipping node %s (doesn't match filter)", node_name)
-                result["skipped"] += 1
-                result["devices"].append({
-                    "node_id": node_id,
-                    "name": node_name,
-                    "status": "skipped_filter",
-                })
+                skipped += 1
                 continue
 
-            _LOGGER.info("Syncing node %s (%s)", node_id, node_name)
+            _LOGGER.info("Auto-syncing node %s (%s)", node_id, node_name)
             
-            # Check connection is still alive before each sync
+            # Re-check connection before each sync
             if not self.is_connected:
-                _LOGGER.warning("Connection lost, attempting to reconnect...")
                 if not await self.async_ensure_connected():
-                    _LOGGER.error("Failed to reconnect, aborting sync_all")
-                    result["failed"] += 1
-                    result["devices"].append({
-                        "node_id": node_id,
-                        "name": node_name,
-                        "status": "failed_connection",
-                    })
+                    _LOGGER.error("Lost connection during sync_all, aborting")
+                    failed += 1
                     break
-
-            success = await self._async_sync_time_internal(node_id)
             
+            success = await self.async_sync_time(node_id)
             if success:
-                result["success"] += 1
-                result["devices"].append({
-                    "node_id": node_id,
-                    "name": node_name,
-                    "status": "success",
-                })
+                count += 1
             else:
-                result["failed"] += 1
-                result["devices"].append({
-                    "node_id": node_id,
-                    "name": node_name,
-                    "status": "failed",
-                })
+                failed += 1
 
-        _LOGGER.info(
-            "Sync all completed: %d success, %d failed, %d skipped",
-            result["success"],
-            result["failed"],
-            result["skipped"],
-        )
-        
-        return result
+        _LOGGER.info("Sync all completed: %d synced, %d failed, %d skipped", count, failed, skipped)
 
     def update_config(self, ws_url: str, timezone: str) -> None:
         """Update configuration (called when options change)."""
